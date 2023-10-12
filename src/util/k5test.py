@@ -506,7 +506,8 @@ def _onexit():
         sys.stdout.flush()
         sys.stdin.readline()
     for proc in _daemons:
-        _stop_daemon(proc)
+        os.kill(proc.pid, signal.SIGTERM)
+        _check_daemon(proc)
     if not _success:
         print
         if not verbose:
@@ -671,11 +672,10 @@ def _cfg_merge(cfg1, cfg2):
     return result
 
 
-# Python gives us shlex.split() to turn a shell command into a list of
-# arguments, but oddly enough, not the easier reverse operation.  For
-# now, do a bad job of faking it.
+# We would like to use shlex.join() from Python 3.8.  For now use
+# shlex.quote() from Python 3.3.
 def _shell_equiv(args):
-    return " ".join(args)
+    return ' '.join(shlex.quote(x) for x in args)
 
 
 # Add a valgrind prefix to the front of args if specified in the
@@ -1339,14 +1339,14 @@ _passes = [
 
     # Exercise the DES3 enctype.
     ('des3', None,
-     {'libdefaults': {'permitted_enctypes': 'des3'}},
+     {'libdefaults': {'permitted_enctypes': 'des3 aes256-sha1'}},
      {'realms': {'$realm': {
                     'supported_enctypes': 'des3-cbc-sha1:normal',
                     'master_key_type': 'des3-cbc-sha1'}}}),
 
     # Exercise the arcfour enctype.
     ('arcfour', None,
-     {'libdefaults': {'permitted_enctypes': 'rc4'}},
+     {'libdefaults': {'permitted_enctypes': 'rc4 aes256-sha1'}},
      {'realms': {'$realm': {
                     'supported_enctypes': 'arcfour-hmac:normal',
                     'master_key_type': 'arcfour-hmac'}}}),

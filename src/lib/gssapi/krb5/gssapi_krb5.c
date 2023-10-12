@@ -197,9 +197,7 @@ g_set kg_vdb = G_SET_INIT;
  * so handling the expiration/invalidation condition here isn't needed.
  */
 OM_uint32
-kg_get_defcred(minor_status, cred)
-    OM_uint32 *minor_status;
-    gss_cred_id_t *cred;
+kg_get_defcred(OM_uint32 *minor_status, gss_cred_id_t *cred)
 {
     OM_uint32 major;
 
@@ -337,7 +335,11 @@ static struct {
     },
     {
         {GSS_KRB5_INQ_SSPI_SESSION_KEY_OID_LENGTH, GSS_KRB5_INQ_SSPI_SESSION_KEY_OID},
-        gss_krb5int_inq_session_key
+        gss_krb5int_inq_sspi_session_key
+    },
+    {
+        {GSS_KRB5_INQ_ODBC_SESSION_KEY_OID_LENGTH, GSS_KRB5_INQ_ODBC_SESSION_KEY_OID},
+        gss_krb5int_inq_odbc_session_key
     },
     {
         {GSS_KRB5_EXPORT_LUCID_SEC_CONTEXT_OID_LENGTH, GSS_KRB5_EXPORT_LUCID_SEC_CONTEXT_OID},

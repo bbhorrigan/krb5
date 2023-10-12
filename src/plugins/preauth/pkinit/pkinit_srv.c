@@ -863,7 +863,7 @@ pkinit_server_return_padata(krb5_context context,
 
         retval = cms_signeddata_create(context, plgctx->cryptoctx,
                                        reqctx->cryptoctx, plgctx->idctx,
-                                       CMS_SIGN_SERVER, 1,
+                                       CMS_SIGN_SERVER,
                                        (unsigned char *)
                                        encoded_dhkey_info->data,
                                        encoded_dhkey_info->length,
@@ -917,7 +917,7 @@ pkinit_server_return_padata(krb5_context context,
         rep->choice = choice_pa_pk_as_rep_encKeyPack;
         retval = cms_envelopeddata_create(context, plgctx->cryptoctx,
                                           reqctx->cryptoctx, plgctx->idctx,
-                                          padata->pa_type, 1,
+                                          padata->pa_type,
                                           (unsigned char *)
                                           encoded_key_pack->data,
                                           encoded_key_pack->length,
@@ -1070,7 +1070,7 @@ static krb5_error_code
 pkinit_init_kdc_profile(krb5_context context, pkinit_kdc_context plgctx)
 {
     krb5_error_code retval;
-    char *eku_string = NULL, *ocsp_check = NULL;
+    char *eku_string = NULL, *ocsp_check = NULL, *minbits = NULL;
 
     pkiDebug("%s: entered for realm %s\n", __FUNCTION__, plgctx->realmname);
     retval = pkinit_kdcdefault_string(context, plgctx->realmname,
@@ -1115,17 +1115,10 @@ pkinit_init_kdc_profile(krb5_context context, pkinit_kdc_context plgctx)
         goto errout;
     }
 
-    pkinit_kdcdefault_integer(context, plgctx->realmname,
-                              KRB5_CONF_PKINIT_DH_MIN_BITS,
-                              PKINIT_DEFAULT_DH_MIN_BITS,
-                              &plgctx->opts->dh_min_bits);
-    if (plgctx->opts->dh_min_bits < PKINIT_DH_MIN_CONFIG_BITS) {
-        pkiDebug("%s: invalid value (%d < %d) for pkinit_dh_min_bits, "
-                 "using default value (%d) instead\n", __FUNCTION__,
-                 plgctx->opts->dh_min_bits, PKINIT_DH_MIN_CONFIG_BITS,
-                 PKINIT_DEFAULT_DH_MIN_BITS);
-        plgctx->opts->dh_min_bits = PKINIT_DEFAULT_DH_MIN_BITS;
-    }
+    pkinit_kdcdefault_string(context, plgctx->realmname,
+                             KRB5_CONF_PKINIT_DH_MIN_BITS, &minbits);
+    plgctx->opts->dh_min_bits = parse_dh_min_bits(context, minbits);
+    free(minbits);
 
     pkinit_kdcdefault_boolean(context, plgctx->realmname,
                               KRB5_CONF_PKINIT_ALLOW_UPN,
@@ -1222,7 +1215,7 @@ pkinit_server_plugin_init_realm(krb5_context context, const char *realmname,
         goto errout;
     plgctx->realmname_len = strlen(plgctx->realmname);
 
-    retval = pkinit_init_plg_crypto(&plgctx->cryptoctx);
+    retval = pkinit_init_plg_crypto(context, &plgctx->cryptoctx);
     if (retval)
         goto errout;
 
@@ -1400,7 +1393,8 @@ certauth_dbmatch_initvt(krb5_context context, int maj_ver, int min_ver,
 }
 
 static krb5_error_code
-load_certauth_plugins(krb5_context context, certauth_handle **handle_out)
+load_certauth_plugins(krb5_context context, const char *const *realmnames,
+                      certauth_handle **handle_out)
 {
     krb5_error_code ret;
     krb5_plugin_initvt_fn *modules = NULL, *mod;
@@ -1440,20 +1434,21 @@ load_certauth_plugins(krb5_context context, certauth_handle **handle_out)
         if (h == NULL)
             goto cleanup;
 
-        ret = (*mod)(context, 1, 1, (krb5_plugin_vtable)&h->vt);
+        ret = (*mod)(context, 1, 2, (krb5_plugin_vtable)&h->vt);
         if (ret) {
             TRACE_CERTAUTH_VTINIT_FAIL(context, ret);
             free(h);
             continue;
         }
         h->moddata = NULL;
-        if (h->vt.init != NULL) {
+        if (h->vt.init_ex != NULL)
+            ret = h->vt.init_ex(context, realmnames, &h->moddata);
+        else if (h->vt.init != NULL)
             ret = h->vt.init(context, &h->moddata);
-            if (ret) {
-                TRACE_CERTAUTH_INIT_FAIL(context, h->vt.name, ret);
-                free(h);
-                continue;
-            }
+        if (ret) {
+            TRACE_CERTAUTH_INIT_FAIL(context, h->vt.name, ret);
+            free(h);
+            continue;
         }
         list[count++] = h;
         list[count] = NULL;
@@ -1516,7 +1511,7 @@ pkinit_server_plugin_init(krb5_context context,
         goto errout;
     }
 
-    retval = load_certauth_plugins(context, &certauth_modules);
+    retval = load_certauth_plugins(context, realmnames, &certauth_modules);
     if (retval)
         goto errout;
 

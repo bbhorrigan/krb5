@@ -117,14 +117,10 @@ int krb5_gss_dbg_client_expcreds = 0;
  * Common code which fetches the correct krb5 credentials from the
  * ccache.
  */
-static krb5_error_code get_credentials(context, cred, server, now,
-                                       endtime, out_creds)
-    krb5_context context;
-    krb5_gss_cred_id_t cred;
-    krb5_gss_name_t server;
-    krb5_timestamp now;
-    krb5_timestamp endtime;
-    krb5_creds **out_creds;
+static krb5_error_code
+get_credentials(krb5_context context, krb5_gss_cred_id_t cred,
+                krb5_gss_name_t server, krb5_timestamp now,
+                krb5_timestamp endtime, krb5_creds **out_creds)
 {
     krb5_error_code     code;
     krb5_creds          in_creds, evidence_creds, mcreds, *result_creds = NULL;
@@ -246,14 +242,14 @@ make_gss_checksum (krb5_context context, krb5_auth_context auth_context,
 {
     krb5_error_code code;
     krb5_int32 con_flags;
-    unsigned char *ptr;
     struct gss_checksum_data *data = cksum_data;
     krb5_data credmsg;
     unsigned int junk;
     krb5_data *finished = NULL;
     krb5_key send_subkey;
+    struct k5buf buf;
 
-    data->checksum_data.data = 0;
+    data->checksum_data = empty_data();
     credmsg.data = 0;
     /* build the checksum field */
 
@@ -291,18 +287,12 @@ make_gss_checksum (krb5_context context, krb5_auth_context auth_context,
                request */
             data->ctx->gss_flags &= ~(GSS_C_DELEG_FLAG |
                                       GSS_C_DELEG_POLICY_FLAG);
-
-            data->checksum_data.length = 24;
         } else {
             if (credmsg.length+28 > KRB5_INT16_MAX) {
                 code = KRB5KRB_ERR_FIELD_TOOLONG;
                 goto cleanup;
             }
-
-            data->checksum_data.length = 28+credmsg.length;
         }
-    } else {
-        data->checksum_data.length = 24;
     }
 #ifdef CFX_EXERCISE
     if (data->ctx->auth_context->keyblock != NULL
@@ -335,40 +325,35 @@ make_gss_checksum (krb5_context context, krb5_auth_context auth_context,
         }
 
         krb5_k_free_key(context, key);
-        data->checksum_data.length += 8 + finished->length;
     }
-
-    data->checksum_data.length += junk;
 
     /* now allocate a buffer to hold the checksum data and
        (maybe) KRB_CRED msg */
+    k5_buf_init_dynamic(&buf);
+    k5_buf_add_uint32_le(&buf, data->md5.length);
+    k5_buf_add_len(&buf, data->md5.contents, data->md5.length);
+    k5_buf_add_uint32_le(&buf, data->ctx->gss_flags);
+    if (credmsg.data != NULL) {
+        k5_buf_add_uint16_le(&buf, KRB5_GSS_FOR_CREDS_OPTION);
+        k5_buf_add_uint16_le(&buf, credmsg.length);
+        k5_buf_add_len(&buf, credmsg.data, credmsg.length);
+    }
+    if (data->exts->iakerb.conv != NULL) {
+        k5_buf_add_uint32_be(&buf, KRB5_GSS_EXTS_IAKERB_FINISHED);
+        k5_buf_add_uint32_be(&buf, finished->length);
+        k5_buf_add_len(&buf, finished->data, finished->length);
+    }
+    while (junk--)
+        k5_buf_add_byte(&buf, 'i');
 
-    if ((data->checksum_data.data =
-         (char *) xmalloc(data->checksum_data.length)) == NULL) {
-        code = ENOMEM;
+    code = k5_buf_status(&buf);
+    if (code)
         goto cleanup;
-    }
 
-    ptr = (unsigned char *)data->checksum_data.data;
-
-    TWRITE_INT(ptr, data->md5.length, 0);
-    TWRITE_STR(ptr, data->md5.contents, data->md5.length);
-    TWRITE_INT(ptr, data->ctx->gss_flags, 0);
-
-    if (credmsg.data) {
-        TWRITE_INT16(ptr, KRB5_GSS_FOR_CREDS_OPTION, 0);
-        TWRITE_INT16(ptr, credmsg.length, 0);
-        TWRITE_STR(ptr, credmsg.data, credmsg.length);
-    }
-    if (data->exts->iakerb.conv) {
-        TWRITE_INT(ptr, KRB5_GSS_EXTS_IAKERB_FINISHED, 1);
-        TWRITE_INT(ptr, finished->length, 1);
-        TWRITE_STR(ptr, finished->data, finished->length);
-    }
-    if (junk)
-        memset(ptr, 'i', junk);
+    data->checksum_data = make_data(buf.data, buf.len);
     *out = &data->checksum_data;
     code = 0;
+
 cleanup:
     krb5_free_data_contents(context, &credmsg);
     krb5_free_data(context, finished);
@@ -376,26 +361,20 @@ cleanup:
 }
 
 static krb5_error_code
-make_ap_req_v1(context, ctx, cred, k_cred, ad_context,
-               chan_bindings, mech_type, token, exts)
-    krb5_context context;
-    krb5_gss_ctx_id_rec *ctx;
-    krb5_gss_cred_id_t cred;
-    krb5_creds *k_cred;
-    krb5_authdata_context ad_context;
-    gss_channel_bindings_t chan_bindings;
-    gss_OID mech_type;
-    gss_buffer_t token;
-    krb5_gss_ctx_ext_t exts;
+make_ap_req_v1(krb5_context context, krb5_gss_ctx_id_rec *ctx,
+               krb5_gss_cred_id_t cred, krb5_creds *k_cred,
+               krb5_authdata_context ad_context,
+               gss_channel_bindings_t chan_bindings, gss_OID mech_type,
+               gss_buffer_t token, krb5_gss_ctx_ext_t exts)
 {
     krb5_flags mk_req_flags = 0;
     krb5_error_code code;
     struct gss_checksum_data cksum_struct;
     krb5_checksum md5;
     krb5_data ap_req;
-    unsigned char *ptr;
     unsigned char *t;
     unsigned int tlen;
+    struct k5buf buf;
 
     k5_mutex_assert_locked(&cred->lock);
     ap_req.data = 0;
@@ -447,19 +426,15 @@ make_ap_req_v1(context, ctx, cred, k_cred, ad_context,
     } else {
         /* allocate space for the token */
         tlen = g_token_size((gss_OID) mech_type, ap_req.length);
-
-        if ((t = (unsigned char *) gssalloc_malloc(tlen)) == NULL) {
+        t = gssalloc_malloc(tlen);
+        if (t == NULL) {
             code = ENOMEM;
             goto cleanup;
         }
-
-        /* fill in the buffer */
-        ptr = t;
-
-        g_make_token_header(mech_type, ap_req.length,
-                            &ptr, KG_TOK_CTX_AP_REQ);
-
-        TWRITE_STR(ptr, ap_req.data, ap_req.length);
+        k5_buf_init_fixed(&buf, t, tlen);
+        g_make_token_header(&buf, mech_type, ap_req.length, KG_TOK_CTX_AP_REQ);
+        k5_buf_add_len(&buf, ap_req.data, ap_req.length);
+        assert(buf.len == tlen);
 
         /* pass it back */
 
@@ -664,7 +639,7 @@ kg_new_connection(
     if (time_rec) {
         if ((code = krb5_timeofday(context, &now)))
             goto cleanup;
-        *time_rec = ts_delta(ctx->krb_times.endtime, now);
+        *time_rec = ts_interval(now, ctx->krb_times.endtime);
     }
 
     /* set the other returns */
@@ -730,7 +705,6 @@ mutual_auth(
 {
     OM_uint32 major_status;
     unsigned char *ptr;
-    char *sptr;
     krb5_data ap_rep;
     krb5_ap_rep_enc_part *ap_rep_data;
     krb5_timestamp now;
@@ -779,7 +753,6 @@ mutual_auth(
     if (ctx->gss_flags & GSS_C_DCE_STYLE) {
         /* Raw AP-REP */
         ap_rep.length = input_token->length;
-        ap_rep.data = (char *)input_token->value;
     } else if (g_verify_token_header(ctx->mech_used,
                                      &(ap_rep.length),
                                      &ptr, KG_TOK_CTX_AP_REP,
@@ -791,9 +764,7 @@ mutual_auth(
 
             /* Handle a KRB_ERROR message from the server */
 
-            sptr = (char *) ptr;           /* PC compiler bug */
-            TREAD_STR(sptr, ap_rep.data, ap_rep.length);
-
+            ap_rep.data = (char *)ptr;
             code = krb5_rd_error(context, &ap_rep, &krb_error);
             if (code)
                 goto fail;
@@ -808,9 +779,7 @@ mutual_auth(
             return(GSS_S_DEFECTIVE_TOKEN);
         }
     }
-
-    sptr = (char *) ptr;                      /* PC compiler bug */
-    TREAD_STR(sptr, ap_rep.data, ap_rep.length);
+    ap_rep.data = (char *)ptr;
 
     /* decode the ap_rep */
     if ((code = krb5_rd_rep(context, ctx->auth_context, &ap_rep,
@@ -878,7 +847,7 @@ mutual_auth(
     if (time_rec) {
         if ((code = krb5_timeofday(context, &now)))
             goto fail;
-        *time_rec = ts_delta(ctx->krb_times.endtime, now);
+        *time_rec = ts_interval(now, ctx->krb_times.endtime);
     }
 
     if (ret_flags)
@@ -1069,24 +1038,15 @@ krb5int_gss_use_kdc_context(OM_uint32 *minor_status,
 #endif
 
 OM_uint32 KRB5_CALLCONV
-krb5_gss_init_sec_context(minor_status, claimant_cred_handle,
-                          context_handle, target_name, mech_type,
-                          req_flags, time_req, input_chan_bindings,
-                          input_token, actual_mech_type, output_token,
-                          ret_flags, time_rec)
-    OM_uint32 *minor_status;
-    gss_cred_id_t claimant_cred_handle;
-    gss_ctx_id_t *context_handle;
-    gss_name_t target_name;
-    gss_OID mech_type;
-    OM_uint32 req_flags;
-    OM_uint32 time_req;
-    gss_channel_bindings_t input_chan_bindings;
-    gss_buffer_t input_token;
-    gss_OID *actual_mech_type;
-    gss_buffer_t output_token;
-    OM_uint32 *ret_flags;
-    OM_uint32 *time_rec;
+krb5_gss_init_sec_context(OM_uint32 *minor_status,
+                          gss_cred_id_t claimant_cred_handle,
+                          gss_ctx_id_t *context_handle,
+                          gss_name_t target_name, gss_OID mech_type,
+                          OM_uint32 req_flags, OM_uint32 time_req,
+                          gss_channel_bindings_t input_chan_bindings,
+                          gss_buffer_t input_token, gss_OID *actual_mech_type,
+                          gss_buffer_t output_token, OM_uint32 *ret_flags,
+                          OM_uint32 *time_rec)
 {
     krb5_gss_ctx_ext_rec exts;
 

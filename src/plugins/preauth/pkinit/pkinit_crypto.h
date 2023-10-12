@@ -103,7 +103,8 @@ typedef struct _pkinit_cert_matching_data {
 /*
  * Functions to initialize and cleanup crypto contexts
  */
-krb5_error_code pkinit_init_plg_crypto(pkinit_plg_crypto_context *);
+krb5_error_code pkinit_init_plg_crypto(krb5_context,
+				       pkinit_plg_crypto_context *);
 void pkinit_fini_plg_crypto(pkinit_plg_crypto_context);
 
 krb5_error_code pkinit_init_req_crypto(pkinit_req_crypto_context *);
@@ -132,9 +133,6 @@ krb5_error_code cms_signeddata_create
 	int cms_msg_type,				/* IN
 		    specifies CMS_SIGN_CLIENT for client-side CMS message
 		    and CMS_SIGN_SERVER for kdc-side */
-	int include_certchain,				/* IN
-		    specifies where certificates field in SignedData
-		    should contain certificate path */
 	unsigned char *auth_pack,			/* IN
 		    contains DER encoded AuthPack (CMS_SIGN_CLIENT)
 		    or DER encoded DHRepInfo (CMS_SIGN_SERVER) */
@@ -192,9 +190,6 @@ krb5_error_code cms_envelopeddata_create
 	pkinit_req_crypto_context req_cryptoctx,	/* IN */
 	pkinit_identity_crypto_context id_cryptoctx,	/* IN */
 	krb5_preauthtype pa_type,			/* IN */
-	int include_certchain,				/* IN
-		    specifies whether the certificates field in
-		    SignedData should contain certificate path */
 	unsigned char *key_pack,			/* IN
 		    contains DER encoded ReplyKeyPack */
 	unsigned int key_pack_len,			/* IN
@@ -612,6 +607,11 @@ extern const krb5_data sha512_id;
 extern const krb5_data oakley_1024;
 extern const krb5_data oakley_2048;
 extern const krb5_data oakley_4096;
+extern const krb5_data ec_p256;
+extern const krb5_data ec_p384;
+extern const krb5_data ec_p521;
+extern const krb5_data dh_oid;
+extern const krb5_data ec_oid;
 
 /**
  * An ordered set of OIDs, stored as krb5_data, of KDF algorithms
@@ -633,5 +633,7 @@ crypto_req_cert_matching_data(krb5_context context,
 			      pkinit_plg_crypto_context plgctx,
 			      pkinit_req_crypto_context reqctx,
 			      pkinit_cert_matching_data **md_out);
+
+int parse_dh_min_bits(krb5_context context, const char *str);
 
 #endif	/* _PKINIT_CRYPTO_H */
